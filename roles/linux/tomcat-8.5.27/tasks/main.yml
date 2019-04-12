@@ -1,0 +1,89 @@
+---
+- name: install additional packages
+  yum:
+    name: "{{ packages_list }}"
+    state: present
+
+- name: add group
+  group: name={{ tomcat_sys_group }} state=present
+
+- name: add user
+  user: name={{ tomcat_sys_user }} group={{ tomcat_sys_group }} home=/usr/share/tomcat createhome=no shell=/bin/false
+
+- name: create /etc/tomcat directory
+  file:
+    path: /etc/tomcat
+    state: directory
+    owner: root
+    group: root
+
+- name: create /etc/tomcat/env-variables-{{ tomcat_instance_name }}.conf file if not exists
+  copy:
+    content: ""
+    dest: /etc/tomcat/env-variables-{{ tomcat_instance_name }}.conf
+    owner: root
+    group: root
+    force: no
+    mode: 0664
+
+- name: create tomcat instance directory
+  file:
+    path: "/opt/{{ tomcat_instance_name }}"
+    state: directory
+
+- name: download and unarchive tomcat
+  unarchive:
+    src: "http://archive.apache.org/dist/tomcat/tomcat-{{ tomcat_minor }}/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    dest: "/opt/{{ tomcat_instance_name }}"
+    remote_src: yes
+    # https://unix.stackexchange.com/a/365990
+    extra_opts: [--strip-components=1]
+    creates: "/opt/{{ tomcat_instance_name }}/bin/catalina.sh"
+
+- name: symlink install directory
+  file:
+    src: "/opt/{{ tomcat_instance_name }}"
+    path: "/usr/share/{{ tomcat_instance_name }}"
+    state: link
+
+- name: change ownership of tomcat installation
+  file: path="/usr/share/{{ tomcat_instance_name }}/" owner=tomcat group=tomcat state=directory recurse=yes
+
+- name: configure tomcat server
+  template: src=server.xml.j2 dest="/usr/share/{{ tomcat_instance_name }}/conf/server.xml"
+  notify: restart tomcat
+
+- name: configure tomcat users
+  template: src=tomcat-users.xml.j2 dest="/usr/share/{{ tomcat_instance_name }}/conf/tomcat-users.xml"
+  notify: restart tomcat
+
+- name: configure tomcat manager
+  template: src=managercontext.xml.j2 dest="/usr/share/{{ tomcat_instance_name }}/webapps/manager/META-INF/context.xml"
+  notify: restart tomcat
+
+- name: install certificate file
+  copy:
+    src: "{{ tomcat_keystore_name }}"
+    dest: "/usr/share/{{ tomcat_instance_name }}/conf/{{ tomcat_keystore_name }}"
+    owner: "{{ tomcat_sys_user }}"
+    group: "{{ tomcat_sys_group }}"
+    mode: 0750
+
+- name: configure tomcat service
+  template:
+    src: tomcat-service.j2
+    dest: "/usr/lib/systemd/system/{{ tomcat_instance_name }}.service"
+    owner: root
+    group: root
+    mode: 0644
+  register: tomcatService
+
+- name: start tomcat
+  systemd:
+    name: "{{ tomcat_instance_name }}"
+    state: started
+    enabled: yes
+    daemon_reload: "{{ tomcatService.changed }}"
+
+- name: wait for tomcat to start
+  wait_for: port={{ tomcat_http_port}} delay=3 timeout=60

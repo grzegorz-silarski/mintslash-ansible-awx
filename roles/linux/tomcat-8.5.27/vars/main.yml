@@ -1,0 +1,5 @@
+---
+packages_list:
+  - curl
+  - unzip
+  - cifs-utils
